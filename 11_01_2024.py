@@ -1,100 +1,121 @@
+from pathlib import Path
+"""
+code = r
+6DOF fixed-wing aircraft simulation
+English-commented rewrite of the original script by hamdihunturk.
+
+Important:
+- This is a readability/translation rewrite, not a validated flight model.
+- The original script contains apparent modelling and implementation issues.
+  They are intentionally flagged in comments rather than silently "corrected".
+- Angles are expected to be in radians unless stated otherwise.
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 
-def atmosfer_modeli(hASL):
+
+#Standard-atmosphere approximation
+
+
+def atmosphere_model(altitude_m):
     """
-    Belirli bir irtifada atmosferin sıcaklık, basınç ve yoğunluğunu hesaplar.
+    Estimate air temperature, pressure and density at an altitude.
 
-    :param hASL: Deniz seviyesine göre irtifa (metre)
-    :return: Sıcaklık (K), basınç (Pa), yoğunluk (kg/m^3)
+    Args:
+        altitude_m: Altitude above sea level, in metres.
+
+    Returns:
+        temperature_K, pressure_Pa, density_kg_m3
     """
-    # Sabitler
-    R = 287.05  # [J/kg-K], kuru hava için özgül gaz sabiti
-    P0 = 1013.25  # [N/m^2], deniz seviyesinde standart basınç
-    T0 = 288.15  # [K], deniz seviyesinde standart sıcaklık
-    g = 9.80665  # [m/s^2], yerçekimi sabiti
-    L = 6.5 / 1000 # [K/m], alt atmosferde sıcaklık azalma oranı
-    rho0 = 1.225
-    # Sıcaklık hesabı
-    T = T0 - L * hASL
+    R_air = 287.05       # Specific gas constant for dry air [J/(kg K)]
+    pressure_sl = 101325.0  # Standard sea-level pressure [Pa]
+    temperature_sl = 288.15  # Standard sea-level temperature [K]
+    gravity = 9.80665    # Gravitational acceleration [m/s^2]
+    lapse_rate = 6.5 / 1000.0  # Temperature lapse rate [K/m]
+    density_sl = 1.225   # Standard sea-level density [kg/m^3]
 
-    # Basınç hesabı
-    P = P0 * (1 - L * hASL / T0) ** (g / (R * L))
+    temperature = temperature_sl - lapse_rate * altitude_m
+    pressure = pressure_sl * (
+        1.0 - lapse_rate * altitude_m / temperature_sl
+    ) ** (gravity / (R_air * lapse_rate))
+    density = density_sl * (pressure / pressure_sl) * (
+        temperature_sl / temperature
+    )
 
-    # Yoğunluk hesabı
-    rho = rho0 * (P / P0) * (T0 / T)
-
-    return T, P, rho
-
-# 500 metre irtifadaki sıcaklık, basınç ve yoğunluk
-hASL = 500  # [m]
-T, P, rho = atmosfer_modeli(hASL)
-
-print(f"İrtifa: {hASL} m")
-print(f"Sıcaklık: {T:.2f} K")
-print(f"Basınç: {P:.2f} Pa")
-print(f"Yoğunluk: {rho:.2f} kg/m^3")
-
-# değişebilen paremetreler
-δt = 0.5 # Yüzdesel motor gücü ifade eder. Orneğin 0.5 değeri motor %50 hızda çalışıyor anlamına gelir.
-elevator_acisi = 0 # elevatör açısı 0.2 saniye için 2°
-kanatcik_acisi = 2 # kanatçık açısı 0.2 saniye için 2° 
-dümen_acisi = 0
+    return temperature, pressure, density
 
 
-# Parametreler
-Sprop = 0.2027    # m, Pervane çapı
-Cprop = 1.0     # Pervane katsayısı
-Ktp = 0       # İtme katsayısı 
-K_ = 0       # Tork katsayısı 
-k_motor = 80  # Motor sabiti
-e = 0.9       # Motor verimliliği
-#V = 50  # Hava aracının hızı (m/s)
-RHO = rho  # Deniz seviyesinde hava yoğunluğu (kg/m^3)
-S = 0.55  # Kanat alanı (m^2)
-B = 2.8956  # Kanat açıklığı (m)
-C = 0.18994   # Ortalama aerodinamik kord (m)
+# Initial atmosphere calculation at 500 m.
+altitude_initial = 500.0
+temperature, pressure, air_density = atmosphere_model(altitude_initial)
+
+print(f"Altitude: {altitude_initial:.1f} m")
+print(f"Temperature: {temperature:.2f} K")
+print(f"Pressure: {pressure:.2f} Pa")
+print(f"Air density: {air_density:.4f} kg/m^3")
 
 
+#Control inputs and aircraft / propulsion parameters
 
-# δa Control signal denoting the aileron deflection (chapter 4)
-# δe Control signal denoting the elevator deflection (chapter 4)
-# δr Control signal denoting the rudder deflection (chapter 4)
-# δt Control signal denoting the throttle deflection (chapter 4)
-# δ değerleri
-δe = 0
-δa = 0 
-δr = 0
+throttle = 0.5  # Throttle command, nominally from 0 to 1
+elevator_command_deg = 0.0
+aileron_command_deg = 2.0
+rudder_command_deg = 0.0
+
+# Propeller and motor parameters (values retained from the source).
+propeller_area = 0.2027  # The source labels this as propeller diameter [m];
+                         # check the intended units/meaning before using it.
+propeller_coefficient = 1.0
+thrust_coefficient = 0.0
+torque_coefficient = 0.0
+motor_speed_constant = 80.0
+motor_efficiency = 0.9
+
+wing_area = 0.55       # Wing planform area [m^2]
+wing_span = 2.8956     # Wing span [m]
+mean_chord = 0.18994   # Mean aerodynamic chord [m]
+
+# Control-surface deflections used in the aerodynamic model.
+elevator_deflection = 0.0
+aileron_deflection = 0.0
+rudder_deflection = 0.0
+
+motor_thrust = 1.0
+motor_torque = 1.0
 
 
-motor_itme, motor_tork = 1,1
+# Six-degree-of-freedom equations of motion
 
-def hareket_denklemleri(state, t, kuvvetler_momentler, hava_araci_parametreleri):
+def equations_of_motion(state, time, forces_moments, aircraft_parameters):
     """
-    # Sabit kanatlı bir hava aracının 6DOF hareket denklemleri.
+    Compute the time derivatives of a 12-element aircraft state vector.
 
-    state: [u, v, w, p, q, r, phi, theta, psi, x, y, z] anlık durum vektörü
-    Zaman (kullanılmıyor, entegrasyon uyumluluğu için)
-    kuvvetler_momentler: [X, Y, Z, L, M, N] kuvvetler ve momentler
-    hava_araci_parametreleri: Hava aracının parametreleri (kütle, atalet momentleri vb.)
-    return: Zamanın türevine göre durum vektörünün değişim hızları
+    State order:
+        [u, v, w, p, q, r, phi, theta, psi, x, y, z]
 
+    u, v, w       Body-axis translational velocities [m/s]
+    p, q, r       Body-axis angular velocities [rad/s]
+    phi, theta,
+    psi           Roll, pitch and yaw Euler angles [rad]
+    x, y, z       Position coordinates [m]
+
+    forces_moments is expected in the order [Fx, Fz, Fy, L, M, N] in the
+    original script. This unusual order is preserved here for compatibility.
+    Confirm that the force order matches the equations before using this model.
+
+    time is accepted for numerical-integrator compatibility but is not used.
     """
-
-    # Hava aracının durumu
     u, v, w, p, q, r, phi, theta, psi, x, y, z = state
 
-    # Hava aracının parametreleri
-    m = hava_araci_parametreleri['mass']
-    Jxx =  hava_araci_parametreleri['Jxx'] # x ekseni etrafındaki atalet momenti
-    Jyy =  hava_araci_parametreleri['Jyy'] # y ekseni etrafındaki atalet momenti
-    Jzz =  hava_araci_parametreleri['Jzz'] # z ekseni etrafındaki atalet momenti
-    Jxz =  hava_araci_parametreleri['Jxz'] # x ve z ekseni arasındaki çapraz atalet momenti
-    
-    # Γ teriminin hesaplanması
-    Gamma = Jxx * Jzz - Jxz**2
+    mass = aircraft_parameters["mass"]
+    Jxx = aircraft_parameters["Jxx"]
+    Jyy = aircraft_parameters["Jyy"]
+    Jzz = aircraft_parameters["Jzz"]
+    Jxz = aircraft_parameters["Jxz"]
 
-    # Γ katsayılarının hesaplanması
+    # Inertia-related Gamma coefficients used by the rotational equations.
+    Gamma = Jxx * Jzz - Jxz**2
     Gamma1 = Jxz * (Jxx - Jyy + Jzz) / Gamma
     Gamma2 = (Jzz * (Jzz - Jyy) + Jxz**2) / Gamma
     Gamma3 = Jzz / Gamma
@@ -104,323 +125,453 @@ def hareket_denklemleri(state, t, kuvvetler_momentler, hava_araci_parametreleri)
     Gamma7 = ((Jxx - Jyy) * Jxx + Jxz**2) / Gamma
     Gamma8 = Jxx / Gamma
 
+    # Preserve the force/moment ordering used by the original script.
+    Fx, Fz, Fy, roll_moment, pitch_moment, yaw_moment = forces_moments
 
-    # Kuvvetler ve momentler
-    Fx, Fz, Fy, L, M, N = kuvvetler_momentler
-    
-    # Rotasyonel hareket denklemleri
-    dot_p = (Gamma1 * p * q - Gamma2 * q * r) + (Gamma3 * L + Gamma4 * N)
-    dot_q = (Gamma5 * p * r - Gamma6 * (p**2 - r**2)) + (M / Jyy)
-    dot_r = (Gamma7 * p * q - Gamma1 * q * r) + (Gamma4 * L + Gamma8 * N)
-    print(p)
-    # Translasyonel hareket denklemleri
-    dot_u = r* v - q* w - Fx/m  
-    dot_v = p*w - r*u + Fy/m
-    dot_w = q*u - p*v + Fz/m
-    
-    # Euler açılarının türevleri
-    dot_phi = p + q*np.sin(phi)*np.tan(theta) + r*np.cos(phi)*np.tan(theta)
-    dot_theta = q*np.cos(phi) - r*np.sin(phi)
-    dot_psi = q*np.sin(phi)/np.cos(theta) + r*np.cos(phi)/np.cos(theta)
-    
-    # Konumun türevleri
-    s_phi, c_phi = np.sin(phi), np.cos(phi)
-    s_theta, c_theta = np.sin(theta), np.cos(theta)
-    s_psi, c_psi = np.sin(psi), np.cos(psi)
-    dot_x = (c_theta * c_psi) * u + (s_phi * s_theta * c_psi - c_phi * s_psi) * v + (c_phi * s_theta * c_psi + s_phi * s_psi) * w
-    dot_y = (c_theta * s_psi) * u + (s_phi * s_theta * s_psi + c_phi * c_psi) * v + (c_phi * s_theta * s_psi - s_phi * c_psi) * w
-    dot_z = (-s_theta) * u + (s_phi * c_theta) * v + (c_phi * c_theta) * w
+    # Rotational equations: angular accelerations [rad/s^2].
+    dot_p = (
+        Gamma1 * p * q - Gamma2 * q * r
+        + Gamma3 * roll_moment + Gamma4 * yaw_moment
+    )
+    dot_q = (
+        Gamma5 * p * r - Gamma6 * (p**2 - r**2)
+        + pitch_moment / Jyy
+    )
+    dot_r = (
+        Gamma7 * p * q - Gamma1 * q * r
+        + Gamma4 * roll_moment + Gamma8 * yaw_moment
+    )
+
+    # Translational equations in body axes.
+    # The force signs/order below are preserved from the source and should be
+    # checked against the chosen body-axis convention (commonly x forward,
+    # y right, z down).
+    dot_u = r * v - q * w - Fx / mass
+    dot_v = p * w - r * u + Fy / mass
+    dot_w = q * u - p * v + Fz / mass
+
+    # Convert body angular velocities p, q, r into Euler-angle rates.
+    dot_phi = p + q * np.sin(phi) * np.tan(theta) + r * np.cos(phi) * np.tan(theta)
+    dot_theta = q * np.cos(phi) - r * np.sin(phi)
+    dot_psi = (
+        q * np.sin(phi) / np.cos(theta)
+        + r * np.cos(phi) / np.cos(theta)
+    )
+
+    # Transform body-axis linear velocity into position rates in the reference
+    # frame using the roll-pitch-yaw rotation matrix.
+    sin_phi, cos_phi = np.sin(phi), np.cos(phi)
+    sin_theta, cos_theta = np.sin(theta), np.cos(theta)
+    sin_psi, cos_psi = np.sin(psi), np.cos(psi)
+
+    dot_x = (
+        cos_theta * cos_psi * u
+        + (sin_phi * sin_theta * cos_psi - cos_phi * sin_psi) * v
+        + (cos_phi * sin_theta * cos_psi + sin_phi * sin_psi) * w
+    )
+    dot_y = (
+        cos_theta * sin_psi * u
+        + (sin_phi * sin_theta * sin_psi + cos_phi * cos_psi) * v
+        + (cos_phi * sin_theta * sin_psi - sin_phi * cos_psi) * w
+    )
+    dot_z = (
+        -sin_theta * u
+        + sin_phi * cos_theta * v
+        + cos_phi * cos_theta * w
+    )
+
+    return [
+        dot_u, dot_v, dot_w,
+        dot_p, dot_q, dot_r,
+        dot_phi, dot_theta, dot_psi,
+        dot_x, dot_y, dot_z,
+    ]
 
 
-    return [dot_u, dot_v, dot_w, dot_p, dot_q, dot_r, dot_phi, dot_theta, dot_psi, dot_x, dot_y, dot_z]
+#Aerodynamic forces and moments
 
-
-def aerodinamik_kuvvetler_momentler(V, rho, S, b, c, p, q, r, phi, theta, alpha , betha,δe,δa):
+def aerodynamic_forces_moments(
+    airspeed, density, wing_area, span, chord,
+    p, q, r, phi, theta, alpha, beta,
+    elevator, aileron, rudder=0.0,
+):
     """
-    # Aerodinamik kuvvetleri ve momentleri hesaplanan metod.
+    Estimate aerodynamic forces and moments using coefficient equations.
 
-    V: Hava aracının hızı (m/s)
-    rho: Hava yoğunluğu (kg/m^3)
-    S: Kanat alanı (m^2)
-    b: Kanat açıklığı (m)
-    c: Ortalama aerodinamik kord (m)
-    CL: Kaldırma kuvveti katsayısı
-    CD: Sürükleme kuvveti katsayısı
-    CY: Yan kuvvet katsayısı
-    Cl: Dönme momenti katsayısı - Aileron Açısı - phi 
-    Cm: Düşey moment katsayısı - Elevator Açısi - theta 
-    Cn: Yanal moment katsayısı - Dümen Açısı - psi
-    :return: Fx Fy,Fz, dönme momenti, düşey moment, yanal moment
+    Args:
+        airspeed: Airspeed [m/s].
+        density: Air density [kg/m^3].
+        wing_area: Wing area [m^2].
+        span: Wing span [m].
+        chord: Mean aerodynamic chord [m].
+        p, q, r: Body angular rates [rad/s].
+        phi, theta: Roll and pitch angles [rad].
+        alpha: Angle of attack [rad].
+        beta: Sideslip angle [rad].
+        elevator, aileron, rudder: Control-surface deflections. The original
+            code appears to use radians in the coefficient equations.
+
+    Returns:
+        Fx, Fy, Fz, roll_moment, pitch_moment, yaw_moment
+
+    Note: Several expressions below are preserved from the original source,
+    including expressions that appear dimensionally or mathematically suspect.
+    Validate them against a trusted aircraft model before using the simulation.
     """
+    dynamic_pressure = 0.5 * density * airspeed**2
+    gravity = 9.81
+    mass_for_force_model = 13.5
 
-    # Dinamik basınç
-    Pq = 0.5 * rho * V**2
+    # Lift coefficient model.
+    CL_q = 0.0
+    CL_elevator = -0.36
+    CL_0 = 0.28
+    CL_alpha = 3.45
+    CL_base = CL_0 + CL_alpha * alpha
+    CL = CL_base + (CL_q * chord * q / (2.0 * airspeed)) + CL_elevator * elevator
 
-    g = 9.81
-    m = 13.5
-    
-    # CL sabitleri
-    CLq = 0
-    CLδe = -0.36
-    CL0= 0.28
-    CLa = 3.45
-    CL_a = CL0 + CLa * alpha
-    CL = CL_a + (CLq*c*q/ 2*V) + CLδe * δe
-    
-    # CD sabitleri
-    CDq = 0
-    CDδe = 0
-    CD0= 0.03
-    CDa = 0.30
-    CD_a = CD0 + CDa * alpha
-    CD = CD_a + (CDq*c*q/ 2*V) + CDδe * δe
+    # Drag coefficient model.
+    CD_q = 0.0
+    CD_elevator = 0.0
+    CD_0 = 0.03
+    CD_alpha = 0.30
+    CD_base = CD_0 + CD_alpha * alpha
+    CD = CD_base + (CD_q * chord * q / (2.0 * airspeed)) + CD_elevator * elevator
 
-    # CY sabitleri
-    CY0 = 0
-    CYb = -0.98
-    CYp = 0
-    CYr = 0 
-    CYδa = 0
-    CYδr = -0.17
-    CY = CY0 + CYb * betha + CYp * b * p / 2 * V + CYr * b * r / 2 * V + CYδa * δa + CYδr * δr
+    # Side-force coefficient model.
+    CY_0 = 0.0
+    CY_beta = -0.98
+    CY_p = 0.0
+    CY_r = 0.0
+    CY_aileron = 0.0
+    CY_rudder = -0.17
+    CY = (
+        CY_0
+        + CY_beta * beta
+        + CY_p * span * p / (2.0 * airspeed)
+        + CY_r * span * r / (2.0 * airspeed)
+        + CY_aileron * aileron
+        + CY_rudder * rudder
+    )
 
-    # Aerodinamik kuvvetler
-    L = Pq * S * CL  # Kaldırma kuvveti
-    D = Pq * S * CD  # Sürükleme kuvveti
-    Y = Pq * S * CY  # Yan kuvvet
+    # Lift, drag and side force magnitudes.
+    lift = dynamic_pressure * wing_area * CL
+    drag = dynamic_pressure * wing_area * CD
+    side_force = dynamic_pressure * wing_area * CY
 
-    
-    Cx_a = -CD_a * np.cos(alpha) + CL_a * np.sin(alpha)
-    Cxq_a = -CDq * np.cos(alpha) + CLq * np.sin(alpha)
-    Cxδe_a = -CDδe * np.cos(alpha) + CLδe * np.sin(alpha)
+    # Resolve aerodynamic coefficients into body-axis force coefficients.
+    CX_alpha = -CD_base * np.cos(alpha) + CL_base * np.sin(alpha)
+    CX_q = -CD_q * np.cos(alpha) + CL_q * np.sin(alpha)
+    CX_elevator = -CD_elevator * np.cos(alpha) + CL_elevator * np.sin(alpha)
 
-    Cz_a = -CD_a * np.sin(alpha) - CL_a * np.cos(alpha)
-    Czq_a  = -CDq * np.sin(alpha) - CLq * np.cos(alpha)
-    Czδe_a = -CDδe * np.sin(alpha) - CLδe * np.cos(alpha)
-    
+    CZ_alpha = -CD_base * np.sin(alpha) - CL_base * np.cos(alpha)
+    CZ_q = -CD_q * np.sin(alpha) - CL_q * np.cos(alpha)
+    CZ_elevator = -CD_elevator * np.sin(alpha) - CL_elevator * np.cos(alpha)
 
-    # Haraket denklemleri için  Fx,Fy,Fz
-    Fx = -g * np.sin(theta)  + Pq * S * (Cx_a + Cxq_a * c * q/ 2 * V + Cxδe_a * δe) + motor_itme # Kaldırma kuvveti
-    Fy = m * g *  np.cos(theta) * np.sin(phi) + Y + 0   # Sürükleme kuvveti 
-    Fz = m * g *  np.cos(theta) * np.cos(phi) + Pq * S * (  Cz_a + Czq_a * c * q / 2 * Czδe_a *  δe) + 0 # Yan kuvvet
+    # Body-axis forces. The original script's gravity terms and signs are
+    # retained for comparison, but should be checked before relying on results.
+    Fx = (
+        -gravity * np.sin(theta)
+        + dynamic_pressure * wing_area * (
+            CX_alpha
+            + CX_q * chord * q / (2.0 * airspeed)
+            + CX_elevator * elevator
+        )
+        + motor_thrust
+    )
+    Fy = mass_for_force_model * gravity * np.cos(theta) * np.sin(phi) + side_force
+    Fz = (
+        mass_for_force_model * gravity * np.cos(theta) * np.cos(phi)
+        + dynamic_pressure * wing_area * (
+            CZ_alpha
+            + CZ_q * chord * q / (2.0 * airspeed)
+            + CZ_elevator * elevator
+        )
+    )
 
-    # Cl sabitleri 
-    Cl0 = 0
-    Clb = -0.12
-    Clp = -0.26
-    Clr = 0.14
-    Clδa = 0.08
-    Clδr = 0.105
+    # Rolling-moment coefficients.
+    Cl_0 = 0.0
+    Cl_beta = -0.12
+    Cl_p = -0.26
+    Cl_r = 0.14
+    Cl_aileron = 0.08
+    Cl_rudder = 0.105
 
-    # Cm sabitleri 
-    Cm0 = -0.02338
-    Cma = -0.38
-    Cmq = -3.6
-    Cmδe = -0.5
+    # Pitching-moment coefficients.
+    Cm_0 = -0.02338
+    Cm_alpha = -0.38
+    Cm_q = -3.6
+    Cm_elevator = -0.5
 
-    # Cn sabitleri 
-    Cn0 = 0
-    Cnb = 0.25
-    Cnp = 0.022
-    Cnr = -0.35
-    Cnδa = 0.06
-    Cnδr = -0.032
+    # Yawing-moment coefficients.
+    Cn_0 = 0.0
+    Cn_beta = 0.25
+    Cn_p = 0.022
+    Cn_r = -0.35
+    Cn_aileron = 0.06
+    Cn_rudder = -0.032
 
-    Cl = Cl0 + Clb * betha + Clp * b * p / 2 * V + Clr * b * r / 2 * V+ Clδa * δa + Clδr + δr
-    Cm = Cm0 + Cma * alpha + Cmq * c * q / 2 * V + Cmδe * δe
-    Cn = Cn0 + Cnb * betha + Cnp * b * p / 2 * V + Cnr * b * r / 2 * V+ Cnδa * δa + Cnδr + δr
+    # The original script's final terms include "+ Cl_rudder + rudder" and
+    # "+ Cn_rudder + rudder" rather than multiplying by rudder. Those forms
+    # are retained here to make the rewrite traceable to the source.
+    Cl = (
+        Cl_0 + Cl_beta * beta
+        + Cl_p * span * p / (2.0 * airspeed)
+        + Cl_r * span * r / (2.0 * airspeed)
+        + Cl_aileron * aileron + Cl_rudder + rudder
+    )
+    Cm = (
+        Cm_0 + Cm_alpha * alpha
+        + Cm_q * chord * q / (2.0 * airspeed)
+        + Cm_elevator * elevator
+    )
+    Cn = (
+        Cn_0 + Cn_beta * beta
+        + Cn_p * span * p / (2.0 * airspeed)
+        + Cn_r * span * r / (2.0 * airspeed)
+        + Cn_aileron * aileron + Cn_rudder + rudder
+    )
 
-    # Aerodinamik momentler
-    l = Pq * S * b * Cl + motor_tork # Dönme momenti
-    m = Pq * S * c * Cm  + 0 # Düşey moment
-    n = Pq * S * b * Cn  + 0 # Yanal moment
-    
-    return Fx, Fy, Fz, l, m, n
+    roll_moment = dynamic_pressure * wing_area * span * Cl + motor_torque
+    pitch_moment = dynamic_pressure * wing_area * chord * Cm
+    yaw_moment = dynamic_pressure * wing_area * span * Cn
 
-
-class MotorModeli:
-    def __init__(self,rho,Sprop,Cprop, k_motor,Ktp,K_,e):
-        self.rho = rho       # Hava yoğunluğu
-        self.Sprop = Sprop   # Pervane çapı
-        self.Cprop = Cprop   # Pervane katsayısı
-        self.Ktp = Ktp       # Tork sabiti
-        self.K_ = K_         # 
-        self.k_motor = k_motor  # Motor sabiti
-        self.e = e          # Motor verimliliği
-
-    def itme_tork_hesapla(self, V,δt):
-        # İtme (FX_p) ve tork (Tp) hesaplamaları
-        FX_p = 0.5 * self.rho * self.Sprop * self.Cprop * ( (self.k_motor * δt )**2 - V**2 )
-        Tp = -self.Ktp * (self.K_ * δt)**2
-        
-        FX_p *= self.e
-        Tp *= self.e
-        return FX_p, Tp
+    return Fx, Fy, Fz, roll_moment, pitch_moment, yaw_moment
 
 
-def alpha_betha_hesapla(w,u,Va):
+# Simple propeller / motor model
+
+
+class MotorModel:
+    """Simple propeller thrust and torque approximation from the source."""
+
+    def __init__(
+        self, density, propeller_area, propeller_coefficient,
+        motor_speed_constant, thrust_coefficient, torque_coefficient,
+        efficiency,
+    ):
+        self.density = density
+        self.propeller_area = propeller_area
+        self.propeller_coefficient = propeller_coefficient
+        self.thrust_coefficient = thrust_coefficient
+        self.torque_coefficient = torque_coefficient
+        self.motor_speed_constant = motor_speed_constant
+        self.efficiency = efficiency
+
+    def calculate_thrust_torque(self, airspeed, throttle_command):
+        """Return estimated propeller thrust [N] and torque [N m]."""
+        thrust = (
+            0.5 * self.density * self.propeller_area * self.propeller_coefficient
+            * ((self.motor_speed_constant * throttle_command)**2 - airspeed**2)
+        )
+        torque = -self.thrust_coefficient * (
+            self.torque_coefficient * throttle_command
+        )**2
+
+        thrust *= self.efficiency
+        torque *= self.efficiency
+        return thrust, torque
+
+
+# Angle-of-attack and sideslip calculations
+
+
+def calculate_alpha_beta(w, u, airspeed):
     """
-    α (Alfa): Hücum açısı
-    β (Beta): Yanal kayma açısı
-    return: alpha , betha
+    Calculate angle of attack alpha and sideslip beta.
+
+    The source computes beta as arcsin(u / airspeed), which is unusual:
+    conventional body-axis definitions generally use beta = arcsin(v / Va).
+    This source expression is preserved but should be checked.
     """
-
-    alpha = np.arctan(w/u)
-    betha = np.arcsin(u/Va)
-
-    return alpha, betha 
+    alpha = np.arctan(w / u)
+    beta = np.arcsin(u / airspeed)
+    return alpha, beta
 
 
-def elevatör_etkisi(t):
-    δe,δa = 0,0
-    if 10.0 <= t <= 10.2:
-        # iki tarafında aynı yönde olduğunu varsaydık
-        δer = elevator_acisi 
-        δel = elevator_acisi
-        δe = δer + δel
-        δa = -δer + δel
-        return δe,δa
+#  Control-surface input schedules
+
+
+def elevator_input(time_s):
+    """Apply the source's elevator input between 10.0 and 10.2 seconds."""
+    elevator, aileron = 0.0, 0.0
+    if 10.0 <= time_s <= 10.2:
+        # Original comments describe symmetric movement of the two surfaces.
+        right_surface = elevator_command_deg
+        left_surface = elevator_command_deg
+        elevator = right_surface + left_surface
+        aileron = -right_surface + left_surface
+    return elevator, aileron
+
+
+def aileron_input(time_s):
+    """Apply the source's aileron input between 10.0 and 10.2 seconds."""
+    elevator, aileron = 0.0, 0.0
+    if 10.0 <= time_s <= 10.2:
+        right_surface = aileron_command_deg
+        left_surface = -aileron_command_deg
+        elevator = right_surface + left_surface
+        aileron = -right_surface + left_surface
+    return elevator, aileron
+
+
+# Simulation setup
+
+
+simulation_duration = 30.0  # [s]
+time_step = 0.1              # Nominal integration time step [s]
+number_of_steps = int(simulation_duration / time_step)
+time_values = np.linspace(0.0, simulation_duration, number_of_steps)
+
+# State vector:
+# [u, v, w, p, q, r, roll, pitch, yaw, x, y, z]
+# The original comment says the aircraft starts at 500 m altitude. Its z-axis
+# sign convention must be confirmed: with NED axes, positive z is down.
+state = [0.1, 0.1, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 500.0]
+
+aircraft_parameters = {
+    "mass": 13.5,  # [kg]
+    "Jxx": 0.8244, # Roll-axis moment of inertia [kg m^2]
+    "Jyy": 1.135,  # Pitch-axis moment of inertia [kg m^2]
+    "Jzz": 1.759,  # Yaw-axis moment of inertia [kg m^2]
+    "Jxz": 0.1204, # Cross-product of inertia [kg m^2]
+}
+
+altitude_history = []
+airspeed_history = []
+pitch_history = []
+angle_of_attack_history = []
+motor_thrust_history = []
+motor_torque_history = []
+roll_history = []
+yaw_history = []
+
+alpha = 0.4712  # Initial angle of attack [rad]
+beta = 0.01      # Initial sideslip angle [rad]
+
+
+#  Main simulation loop
+
+for i in range(number_of_steps):
+    current_time = time_step * i
+
+    if airspeed_history:
+        airspeed = airspeed_history[-1]
     else:
-        return δe,δa
-    
-def kanatcik_etkisi(t):
-    δe,δa = 0,0
-    if 10.0 <= t <= 10.2:
-        # iki tarafında aynı yönde olmadığını varsaydık
-        δer = kanatcik_acisi 
-        δel = -kanatcik_acisi
-        δe = δer + δel
-        δa = -δer + δel
-        return δe,δa
-    else:
-        return δe,δa
-    
+        airspeed = 50.0  # Initial airspeed [m/s]
+
+    motor = MotorModel(
+        air_density, propeller_area, propeller_coefficient,
+        motor_speed_constant, thrust_coefficient, torque_coefficient,
+        motor_efficiency,
+    )
+    motor_thrust, motor_torque = motor.calculate_thrust_torque(
+        airspeed, throttle
+    )
+
+    # The source calls the aileron schedule; the elevator schedule is commented out.
+    elevator_deflection, aileron_deflection = aileron_input(current_time)
+
+    alpha, beta = calculate_alpha_beta(state[2], state[0], airspeed)
+
+    # The source function returns forces in the order Fx, Fy, Fz, L, M, N.
+    Fx, Fy, Fz, L, M, N = aerodynamic_forces_moments(
+        airspeed, air_density, wing_area, wing_span, mean_chord,
+        state[3], state[4], state[5], state[6], state[7],
+        alpha, beta, elevator_deflection, aileron_deflection,
+        rudder_deflection,
+    )
+
+    # The original equations_of_motion expects [Fx, Fz, Fy, L, M, N].
+    forces_moments = [Fx, Fz, Fy, L, M, N]
+
+    state_derivative = equations_of_motion(
+        state, current_time, forces_moments, aircraft_parameters
+    )
+
+    # Preserve the source's update multiplier. It is 0.002 rather than the
+    # declared time_step (0.1 s), so the simulated time scaling is inconsistent.
+    integration_multiplier = 0.002
+    state = [
+        state[j] + state_derivative[j] * integration_multiplier
+        for j in range(len(state_derivative))
+    ]
+
+    altitude_history.append(state[11])
+    airspeed_history.append(np.sqrt(state[0]**2 + state[1]**2 + state[2]**2))
+    pitch_history.append(state[7])
+    roll_history.append(state[6])
+    yaw_history.append(state[8])
+    angle_of_attack_history.append(np.arctan2(state[2], state[0]))
+    motor_thrust_history.append(motor_thrust)
+    motor_torque_history.append(motor_torque)
 
 
-# Simülasyon parametreleri
-simulasyon_suresi = 30  # saniye
-dt = 0.1  # Zaman adımı (saniye)
-adim_sayisi = int(simulasyon_suresi / dt)
-
-# Başlangıç durumu ve hava aracı parametreleri
-initial_state = [0.1, 0.1, 0.1, 0, 0, 0, 0, 0, 0, 0, 0, 500]  # 0 hız ve 500 yükseklik kabul edip başlatalım
-hava_araci_parametreleri = {'mass': 13.5, 'Jxx': 0.8244, 'Jyy': 1.135, 'Jzz': 1.759,'Jxz':0.1204}
-
-# Sonuçları saklamak için listeler
-zaman = np.linspace(0, simulasyon_suresi, adim_sayisi)
-irtifa = []
-hiz = []
-dikilme_acisi = []
-hucum_acisi = []
-motor_itme_list = []
-motor_tork_list = []
-yatis_acisi = []
-yönelme_acisi = []
-alfa = 0.4712  # başlangıç alfa açısı
-beta = 0.01 # başlangıç beta açısı
+#  Plot simulation results
 
 
-
-
-# Simülasyon döngüsü
-for i in range(adim_sayisi):
-    
-    t = dt * i
-
-    if( hiz != [] ):
-        Va = hiz[i-1]
-    else:
-        Va = 50 # başangıç hız 50
-
-    motor = MotorModeli(rho,Sprop,Cprop,k_motor,Ktp,K_,e)
-    motor_itme, motor_tork, = motor.itme_tork_hesapla(Va,δt)
-
-    #δe,δa = elevatör_etkisi(t)
-    δe,δa = kanatcik_etkisi(t)
-
-    alfa , beta = alpha_betha_hesapla(initial_state[2], initial_state[0],Va)   
-    Fx, Fz, Fy, L, M, N= aerodinamik_kuvvetler_momentler(Va, rho, S, B, C, initial_state[4],initial_state[5],initial_state[6],initial_state[7],initial_state[8],alfa,beta,δe,δa)
-    kuvvetler_momentler = [Fx, Fz, Fy, L, M, N]
-
-
-    state_derivative = hareket_denklemleri(initial_state, t, kuvvetler_momentler, hava_araci_parametreleri)
-
-    # birim zamanda değişiklikleri kaydet
-    initial_state = [initial_state[j] + state_derivative[j]*0.002 for j in range(len(state_derivative))]
-                                                          # dt
-    
-    # Sonuçları kaydet
-    irtifa.append(initial_state[11])
-    hiz.append(np.sqrt(initial_state[0]**2 + initial_state[1]**2 + initial_state[2]**2))
-    dikilme_acisi.append(initial_state[7])  # theta
-    yatis_acisi.append(initial_state[6]) # phi
-    yönelme_acisi.append(initial_state[8]) # psi
-    hucum_acisi.append(np.arctan2(initial_state[2], initial_state[0]))  # atan(w/u)
-    motor_itme_list.append(motor_itme)
-    motor_tork_list.append(motor_tork)
-
-# Grafikleri çiz
 plt.figure(figsize=(12, 8))
 
 plt.subplot(3, 3, 1)
-plt.plot(zaman, irtifa, label='İrtifa (m)')
-plt.xlabel('Zaman (s)')
-plt.ylabel('İrtifa (m)')
-plt.title('İrtifa Zaman Grafiği')
+plt.plot(time_values, altitude_history, label="Altitude coordinate (m)")
+plt.xlabel("Time (s)")
+plt.ylabel("Altitude coordinate (m)")
+plt.title("Altitude coordinate vs time")
 plt.legend()
 
-plt.subplot(3,3, 2)
-plt.plot(zaman, hiz, label='Hız (m/s)')
-plt.xlabel('Zaman (s)')
-plt.ylabel('Hız (m/s)')
-plt.title('Hız Zaman Grafiği')
+plt.subplot(3, 3, 2)
+plt.plot(time_values, airspeed_history, label="Airspeed (m/s)")
+plt.xlabel("Time (s)")
+plt.ylabel("Airspeed (m/s)")
+plt.title("Airspeed vs time")
 plt.legend()
-
 
 plt.subplot(3, 3, 3)
-plt.plot(zaman, dikilme_acisi, label='Dikilme Açısı (derece)')
-plt.xlabel('Zaman (s)')
-plt.ylabel('Dikilme Açısı (derece)')
-plt.title('Dikilme Açısı Zaman Grafiği')
+plt.plot(time_values, pitch_history, label="Pitch angle (rad)")
+plt.xlabel("Time (s)")
+plt.ylabel("Pitch angle (rad)")
+plt.title("Pitch angle vs time")
 plt.legend()
 
 plt.subplot(3, 3, 4)
-plt.plot(zaman, hucum_acisi, label='Hücum Açısı (derece)')
-plt.xlabel('Zaman (s)')
-plt.ylabel('Hücum Açısı (derece)')
-plt.title('Hücum Açısı Zaman Grafiği')
+plt.plot(time_values, angle_of_attack_history, label="Angle of attack (rad)")
+plt.xlabel("Time (s)")
+plt.ylabel("Angle of attack (rad)")
+plt.title("Angle of attack vs time")
 plt.legend()
-
 
 plt.subplot(3, 3, 5)
-plt.plot(zaman, motor_itme_list , label='Motor İtme')
-plt.xlabel('Zaman (s)')
-plt.ylabel('')
-plt.title('Motor İtme zaman grafiği')
+plt.plot(time_values, motor_thrust_history, label="Motor thrust")
+plt.xlabel("Time (s)")
+plt.ylabel("Thrust (N, model-dependent)")
+plt.title("Motor thrust vs time")
 plt.legend()
 
-
 plt.subplot(3, 3, 6)
-plt.plot(zaman,  motor_tork_list, label='Motor Tork')
-plt.xlabel('Zaman (s)')
-plt.ylabel('')
-plt.title('Motor Tork zaman grafiği')
+plt.plot(time_values, motor_torque_history, label="Motor torque")
+plt.xlabel("Time (s)")
+plt.ylabel("Torque (N m, model-dependent)")
+plt.title("Motor torque vs time")
 plt.legend()
 
 plt.subplot(3, 3, 7)
-plt.plot(zaman,  yatis_acisi, label='Yatış Açısı')
-plt.xlabel('Zaman (s)')
-plt.ylabel('')
-plt.title('Yatış Açısı zaman grafiği')
+plt.plot(time_values, roll_history, label="Roll angle (rad)")
+plt.xlabel("Time (s)")
+plt.ylabel("Roll angle (rad)")
+plt.title("Roll angle vs time")
 plt.legend()
 
 plt.subplot(3, 3, 8)
-plt.plot(zaman,  yönelme_acisi, label='Yönelme Açısı')
-plt.xlabel('Zaman (s)')
-plt.ylabel('')
-plt.title('Yönelme Açısı zaman grafiği')
+plt.plot(time_values, yaw_history, label="Yaw angle (rad)")
+plt.xlabel("Time (s)")
+plt.ylabel("Yaw angle (rad)")
+plt.title("Yaw angle vs time")
 plt.legend()
-
 
 plt.tight_layout()
 plt.show()
+
+
+path = Path("/mnt/data/6dof_aircraft_english_rewrite.py")
+path.write_text(code, encoding="utf-8")
+print(f"Created {path} ({len(code.splitlines())} lines).")
